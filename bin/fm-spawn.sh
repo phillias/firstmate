@@ -636,7 +636,8 @@
 # resolver because `cursor` is not the CLI name. A cursor SECONDMATE instead runs
 # the tracked project-scope .cursor/hooks.json in its own home, whose stop-hook
 # park owns that home's supervision (docs/supervision-protocols/cursor.md).
-# claude is the one harness whose pre-launch setup can REFUSE the spawn: before
+# claude's pre-launch setup can REFUSE the spawn (grok's and codex's too, see
+# the pre-launch trust step): before
 # any per-task state exists, and before its busy hooks are written, every
 # claude launch pre-registers its launch directory -
 # the task worktree, or the secondmate home for a --secondmate spawn -
@@ -5895,6 +5896,13 @@ spawn_assert_agent_worktree
 # registration is not fatal here: the post-launch gate (agy_wait_for_working)
 # answers the dialog itself and, on a path that was not pre-registered, refuses
 # to count a busy turn as ready until it has done so.
+# grok and codex gate an unseen repository behind their own folder-trust dialog
+# and honour an entry written ahead of launch, so a ship or scout launch of
+# either pre-registers it through bin/fm-worker-trust.sh, which owns the store,
+# the key each harness reads, and the scope test. A refusal blocks the spawn
+# like claude's rather than launching a worker that would wedge on the dialog;
+# only a host without python 3.11+ to read the store degrades to a warning.
+# A secondmate home is persistent and is the operator's to trust once by hand.
 AGY_TRUST_PREREGISTERED=0
 case "$HARNESS" in
 claude*)
@@ -5918,6 +5926,18 @@ agy)
     AGY_TRUST_PREREGISTERED=1
   else
     echo "warning: could not pre-register agy workspace trust for $WT; the launch will answer the folder-trust dialog in window $T instead" >&2
+  fi
+  ;;
+grok* | codex*)
+  if [ "$KIND" != secondmate ]; then
+    spawn_trust_rc=0
+    "$FM_ROOT/bin/fm-worker-trust.sh" "${HARNESS%%[!a-z]*}" "$WT" "$PROJ_ABS" >/dev/null || spawn_trust_rc=$?
+    if [ "$spawn_trust_rc" -eq 3 ]; then
+      echo "warning: could not pre-register ${HARNESS%%[!a-z]*} folder trust for $WT; a repository it has not trusted yet will show its trust dialog in window $T" >&2
+    elif [ "$spawn_trust_rc" -ne 0 ]; then
+      echo "error: could not pre-register ${HARNESS%%[!a-z]*} folder trust for $WT; refusing to launch a worker that would wedge on the trust dialog; $(spawn_endpoint_hint)" >&2
+      exit 1
+    fi
   fi
   ;;
 esac
@@ -6723,17 +6743,17 @@ EOF
     # grok fires a Stop hook at every turn boundary (verified, grok 0.2.73), the
     # clean equivalent of codex's notify= and pi's turn_end. But grok only loads
     # PROJECT hooks (<worktree>/.grok/hooks/, <worktree>/.claude/settings.local.json)
-    # after the folder is granted hook-trust, which is not automatic and which
-    # firstmate cannot establish at launch without editing grok's own managed
-    # trust store (a high-blast-radius write). GLOBAL hooks in ~/.grok/hooks/ are
+    # after the folder is granted trust. The pre-launch trust step records that
+    # trust for the primary checkout, but a global hook fires whether or not the
+    # operator later revokes it. GLOBAL hooks in ~/.grok/hooks/ are
     # always trusted and load on first launch with no gate. So the turn-end hook
     # lives OUTSIDE the worktree as a single firstmate-owned global hook that is a
     # guarded no-op for every non-firstmate grok session: it fires only when the
     # current workspace holds a .fm-grok-turnend token pointer that matches the
     # firstmate-owned hook registry. firstmate then drops that per-task pointer
     # (gitignored, like the other harnesses' worktree hook files).
-    # Result: the hook is outside the worktree, needs no trust grant, and never
-    # touches grok's managed config - only firstmate-owned files.
+    # Result: the hook is outside the worktree, needs no trust grant, and writes
+    # only firstmate-owned files.
     GROK_HOOKS_DIR="${GROK_HOME:-$HOME/.grok}/hooks"
     GROK_AUTH_DIR="$GROK_HOOKS_DIR/fm-turn-end.d"
     mkdir -p "$GROK_AUTH_DIR"

@@ -102,7 +102,7 @@
 # dialog. This is a best-effort backstop, not prevention: it never suppresses
 # a real busy verdict once any hook has posted, and it defers to whatever
 # harness-specific trust pre-registration already exists (fm-claude-trust.sh,
-# GEMINI_CLI_TRUST_WORKSPACE) to stop the dialog from appearing at all.
+# fm-agy-trust.sh, fm-worker-trust.sh, GEMINI_CLI_TRUST_WORKSPACE) to stop the dialog from appearing at all.
 # Apart from the launch-prompt backstop above, Grok, Rovo, and AGY are the only
 # harnesses whose rendered text is their SOLE classification, because none of
 # their structured lifecycles was credited-live-verified

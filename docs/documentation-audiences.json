@@ -622,6 +622,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/worker-trust.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/voice-relay.md",
       "audience": "operator-current"
     },

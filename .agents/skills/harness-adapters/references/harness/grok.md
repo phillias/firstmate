@@ -43,14 +43,11 @@ The project picker and the folder-trust gate are separate dialogs.
 On 2026-09-24, on those same first dispatches, Grok 1.0.41 rendered a folder-trust gate in a linked git worktree.
 The dialog printed the primary checkout path, because a linked worktree's git root resolves to the main one, so the text reads exactly like a worktree-isolation violation when isolation is intact.
 Check the worker's real location with `/proc/<pid>/cwd`, never the path the dialog prints.
-Answer the gate with the key path's Enter (`../../../bin/fm-send.sh <target> --key Enter`).
-`../../../bin/fm-send.sh` carries only Escape, Enter, and C-c, and a literal `y` has no sanctioned route.
-On 2026-09-24 Grok 1.0.41 persisted that answer to `~/.grok/trusted_folders.toml`, keyed by the path the dialog prints.
-That is the same store `../../../bin/fm-spawn.sh` deliberately does not write and calls a high-blast-radius write.
-In a linked worktree the trust therefore lands on the primary checkout, not the disposable copy, and it persists for every later Grok run there.
-This silently enables Grok project hooks for that checkout.
-Answering the gate is nonetheless the sanctioned route, because `../../../bin/fm-send.sh` has no other way to clear it.
-It is a knowing exception to the store-avoidance stance, not an oversight, so expect the new entry to appear in that file.
+The gate renders only for a repository carrying a trust-gated resource such as project hooks, and answering it writes `~/.grok/trusted_folders.toml` (under `GROK_HOME` when set), keyed by that printed primary-checkout path.
+So `../../../../../bin/fm-spawn.sh` pre-registers the primary checkout through `../../../../../bin/fm-worker-trust.sh` before every ship or scout launch - the same entry answering would write, which an entry for the worktree path cannot replace - and refuses the spawn when that registration is refused ([verification](../../../../../docs/verification/worker-trust.md)).
+That trust persists for every later Grok run in that checkout and enables its project hooks, the same as an answered gate.
+A visible gate on a worker means the registration did not take effect; inspect the spawn's error output rather than sending keys, because `../../../bin/fm-send.sh` carries only Escape, Enter, and C-c and keypresses were observed not to land.
+A secondmate home is not pre-registered, so its operator trusts it once by hand.
 
 ## Training opt-in
 
@@ -73,7 +70,7 @@ The shared classifier locates the full box and all content rows, so border curso
 ## Worker turn-end hook
 
 Grok fires `Stop` each turn.
-Project hooks require folder trust in `~/.grok/trusted_folders.toml`, which the spawn does not edit, though answering the folder-trust gate above writes it; global `~/.grok/hooks/` is always trusted.
+Project hooks require folder trust in `~/.grok/trusted_folders.toml`, which the spawn pre-registers for the primary checkout as described above; global `~/.grok/hooks/` is always trusted.
 The spawn installs guarded global `fm-turn-end.json` and `fm-turn-end.sh`.
 They act only when workspace `.fm-grok-turnend` matches the registry under `~/.grok/hooks/fm-turn-end.d/`, then touch the task's `state/<id>.turn-ended` through always-set `GROK_WORKSPACE_ROOT`, which equals the worktree.
 This stays outside the worktree, needs no trust grant, and writes only Firstmate files.

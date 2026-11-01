@@ -758,22 +758,27 @@ test_orca_snapshot_exposes_worker_store_values() {
 [ "$1" = -u ] && [ "$2" = show-environment ] && [ "$3" = -t ] && [ "$4" = =scoped-source ] || exit 2
 case "${5:-}" in
   '') printf '\n' ;;
-  HOME) printf 'HOME=/source-home\n' ;;
+  HOME) printf 'HOME=/source-caf\351\n' ;;
   GROK_HOME)
-    if [ "${FM_TEST_GROK_UNSET:-0}" = 1 ]; then printf '%s\n' '-GROK_HOME'; else printf 'GROK_HOME=/source-grok\n'; fi
+    if [ "${FM_TEST_GROK_UNSET:-0}" = 1 ]; then printf '%s\n' '-GROK_HOME'; else printf 'GROK_HOME=/source-grok-caf\351\n'; fi
     ;;
   *) exit 1 ;;
 esac
 EOF
   chmod +x "$fb/tmux"
   for state in set unset; do
-    out=$(FM_TEST_GROK_UNSET=$([ "$state" = unset ] && echo 1 || echo 0) NAMES=$'HOME\nGROK_HOME' PATH="$fb:$PATH" \
-      bash -c '. "$1"; fm_backend_orca_launch_env_args scoped-source "$NAMES" SNAPSHOT; printf "%s\n%s\n%s\n%s\n" "$FM_BACKEND_ORCA_HOME_STATE" "$FM_BACKEND_ORCA_HOME_VALUE" "$FM_BACKEND_ORCA_GROK_HOME_STATE" "$FM_BACKEND_ORCA_GROK_HOME_VALUE"' \
+    printf '/source-caf\351' > "$case_dir/expected-home"
+    printf '/source-grok-caf\351' > "$case_dir/expected-grok"
+    out=$(FM_TEST_GROK_UNSET=$([ "$state" = unset ] && echo 1 || echo 0) NAMES=$'HOME\nGROK_HOME' \
+      SNAPSHOT_HOME="$case_dir/observed-home" SNAPSHOT_GROK="$case_dir/observed-grok" PATH="$fb:$PATH" \
+      bash -c '. "$1"; fm_backend_orca_launch_env_args scoped-source "$NAMES" SNAPSHOT; printf "%s" "$FM_BACKEND_ORCA_HOME_VALUE" > "$SNAPSHOT_HOME"; printf "%s" "$FM_BACKEND_ORCA_GROK_HOME_VALUE" > "$SNAPSHOT_GROK"; printf "%s\n%s\n%s\n%s\n" "$FM_BACKEND_ORCA_HOME_STATE" "$FM_BACKEND_ORCA_HOME_VALUE" "$FM_BACKEND_ORCA_GROK_HOME_STATE" "$FM_BACKEND_ORCA_GROK_HOME_VALUE"' \
       _ "$ROOT/bin/backends/orca.sh") \
       || fail "the Orca source snapshot refused the $state GROK_HOME case"
-    assert_contains "$out" $'set\n/source-home' "the snapshot did not retain the sourced HOME"
+    assert_contains "$out" $'set\n/source-caf' "the snapshot did not retain the sourced HOME"
+    cmp -s "$case_dir/expected-home" "$case_dir/observed-home" || fail "the snapshot corrupted non-ASCII HOME bytes"
     if [ "$state" = set ]; then
-      assert_contains "$out" $'set\n/source-grok' "the snapshot did not retain sourced GROK_HOME"
+      assert_contains "$out" $'set\n/source-grok-caf' "the snapshot did not retain sourced GROK_HOME"
+      cmp -s "$case_dir/expected-grok" "$case_dir/observed-grok" || fail "the snapshot corrupted non-ASCII GROK_HOME bytes"
     else
       assert_contains "$out" unset "the snapshot did not retain an explicitly unset GROK_HOME"
       assert_not_contains "$out" /source-grok "an unset GROK_HOME retained a sourced value"

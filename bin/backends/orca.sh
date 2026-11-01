@@ -109,7 +109,7 @@ if (mode === "--state") {
     `FM_BACKEND_ORCA_HOME_VALUE=${shellQuote((state.HOME || ["absent", ""])[1])}`,
     `FM_BACKEND_ORCA_GROK_HOME_STATE=${shellQuote((state.GROK_HOME || ["absent", ""])[0])}`,
     `FM_BACKEND_ORCA_GROK_HOME_VALUE=${shellQuote((state.GROK_HOME || ["absent", ""])[1])}`,
-  ].join("\n"));
+  ].join("\n"), "latin1");
 } else {
   process.stdout.write(rendered, "latin1");
 }

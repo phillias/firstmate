@@ -20,10 +20,8 @@ These command-line and terminal facts apply to pane-backed sessions; for T3 Code
 | Marker | None; identity comes from ancestry, and `../../../bin/fm-harness.sh` is what keeps a retained foreign `CLAUDECODE` from renaming it. Verified on 2026-09-01 with codex-cli 0.152.0: the pane process is the `node` npm shim and the native `codex` binary runs as its foreground child, so a tool subprocess reaches the native name directly while the shim itself is identified from its script path. |
 
 A directory trust dialog appears on the first run for a repository root: "Do you trust the contents of this directory?"
-Answering it writes `[projects."<primary checkout>"] trust_level = "trusted"` to `${CODEX_HOME:-~/.codex}/config.toml`, and codex also honours an entry for the worktree path itself.
-So `../../../../../bin/fm-spawn.sh` pre-registers only the task worktree through `../../../../../bin/fm-worker-trust.sh` before every ship or scout launch, and refuses the spawn when that registration is refused, including when the primary checkout already records a non-trusted level that a worktree entry would override ([verification](../../../../../docs/verification/worker-trust.md)).
-A visible dialog on a worker means the registration did not take effect, or the host lacked python 3.11+ to read the store, which the spawn reports as a warning; Enter on the preselected `Yes, continue` accepts it.
-A secondmate home is not pre-registered, so its operator trusts it once by hand.
+Accept it with Enter and verify the instructions begin processing.
+The decision persists for the repository, so later worktrees of the same project skip it.
 
 ## Hook trust
 

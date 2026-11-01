@@ -1,44 +1,47 @@
 #!/usr/bin/env bash
-# Pre-register a grok or codex worker's folder trust for the isolated task
-# worktree a ship/scout spawn is about to launch into, so the worker reaches its
-# brief instead of parking on a first-run trust dialog firstmate cannot answer.
+# Pre-register a worker harness's folder trust, supervisor-side, for the
+# isolated task worktree a ship/scout spawn is about to launch into, so the
+# worker reaches its brief instead of parking on a first-run trust dialog
+# firstmate cannot answer.
 #
-# Usage: fm-worker-trust.sh <grok|codex> <worktree> <project>
+# Usage: fm-worker-trust.sh <harness> <worktree> <project>
+#   <harness>   an exact verified harness name; grok is the one supported today
 #   <worktree>  the isolated task worktree this spawn launches into
-#   <project>   the primary checkout that worktree belongs to
+#   <project>   the project checkout that worktree belongs to (the primary
+#               checkout, or a linked worktree of it)
+# The store is read from this process's environment, so bin/fm-spawn.sh runs the
+# helper with exactly the HOME and harness home variables the worker will see.
 # Prints one line naming what it registered; refuses loudly on anything else.
-# Exit 0 registered (or already registered), 1 refused, 2 usage, 3 no python
-# 3.11+ to read the TOML store with: nothing was inspected or written, which
-# bin/fm-spawn.sh reports as a warning rather than a reason to stop the spawn.
+# Exit 0 registered (or already registered), 1 refused, 2 usage. A refusal,
+# including a host without python 3.11+ to read the store with, stops the
+# spawn: there is no warning-only path.
 #
 # WHY THIS EXISTS. Every task worktree is a path the harness has never seen, and
-# the operator can pre-register only directories they open by hand. Both
-# harnesses keep the decision in a TOML store the launching user owns and honour
-# an entry written ahead of launch (verified live under a throwaway home,
-# docs/verification/worker-trust.md):
+# the operator can pre-register only directories they open by hand. Each
+# supported harness keeps the decision in a store the launching user owns and
+# honours an entry written ahead of launch (verified live under a throwaway
+# home, docs/verification/worker-trust.md):
 #   grok   ${GROK_HOME:-$HOME/.grok}/trusted_folders.toml, a [folders."<path>"]
 #          table with trusted = true. grok keys the decision on the resolved git
 #          root, which for a linked worktree is the PRIMARY CHECKOUT: an entry
 #          for the worktree path alone is ignored, so the primary checkout is
 #          what this records - exactly what answering the dialog writes.
-#   codex  ${CODEX_HOME:-$HOME/.codex}/config.toml, a [projects."<path>"] table
-#          with trust_level = "trusted". codex honours an entry for the worktree
-#          itself, so only that narrowest path is recorded.
-# Neither entry is consent the operator did not give elsewhere: an existing
-# entry that records a decline (grok trusted other than true, codex trust_level
-# other than "trusted" on the worktree or its primary checkout) is refused,
-# because a worktree entry would silently override it.
+# An entry is never consent the operator did not give elsewhere: an existing
+# entry that records a decline (grok trusted other than true) is refused rather
+# than overridden.
 #
 # THE SCOPE TEST IS THE SAFETY PROPERTY and mirrors bin/fm-claude-trust.sh and
 # bin/fm-agy-trust.sh: <worktree> must be a LINKED git worktree - its own git
 # dir, sharing <project>'s common dir - whose top level is exactly the resolved
-# argument, and <project> must be the primary checkout of that repository. A
-# primary checkout, a worktree of an unrelated repo, a subdirectory of a
-# worktree, a plain directory, and a home directory are each refused with a
-# non-zero exit, never a warning and never a silent skip. Only the launching
+# argument. A primary checkout, a worktree of an unrelated repo, a subdirectory
+# of a worktree, a plain directory, and a home directory are each refused with a
+# non-zero exit, never a warning and never a silent skip. When <project> is
+# itself a linked worktree, its primary checkout is derived from the shared
+# common dir and verified, as bin/fm-claude-trust.sh does. Only the launching
 # user's own store is written, it must be a regular file this uid owns, the new
 # table is appended so every existing byte is preserved, the result must parse
-# to the original document plus that one entry, and the replacement is atomic.
+# to the original document plus that one entry, and the replacement is atomic
+# under a lock the kernel releases when this process exits.
 set -u
 unset CDPATH \
   GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_INDEX_FILE \
@@ -47,7 +50,8 @@ unset CDPATH \
   GIT_CONFIG_SYSTEM GIT_CONFIG_NOSYSTEM GIT_CONFIG_COUNT
 
 usage() {
-  echo "usage: fm-worker-trust.sh <grok|codex> <worktree> <project>" >&2
+  echo "usage: fm-worker-trust.sh <harness> <worktree> <project>" >&2
+  echo "       <harness> is an exact verified harness name: grok" >&2
   exit 2
 }
 
@@ -56,7 +60,7 @@ HARNESS=$1
 WT_ARG=$2
 PROJ_ARG=$3
 case "$HARNESS" in
-  grok | codex) ;;
+  grok) ;;
   *) usage ;;
 esac
 
@@ -103,22 +107,30 @@ PROJ_TOP=$(git -C "$PROJ_REAL" rev-parse --show-toplevel 2>/dev/null) || true
 PROJ_TOP_REAL=
 [ -z "$PROJ_TOP" ] || PROJ_TOP_REAL=$(real_dir "$PROJ_TOP") || true
 [ "$PROJ_TOP_REAL" = "$PROJ_REAL" ] || refuse "project '$PROJ_REAL' is not a checkout root"
-PROJ_GIT_DIR=$(git_dir_of "$PROJ_REAL") || true
 PROJ_COMMON=$(common_dir_of "$PROJ_REAL") || true
 [ -n "$PROJ_COMMON" ] || refuse "project '$PROJ_REAL' is not inside a git repository"
-[ "$PROJ_GIT_DIR" = "$PROJ_COMMON" ] || refuse "project '$PROJ_REAL' is not a primary checkout"
 [ "$WT_COMMON" = "$PROJ_COMMON" ] || refuse "'$WT_REAL' is not a worktree of project '$PROJ_REAL'"
+PROJ_GIT_DIR=$(git_dir_of "$PROJ_REAL") || true
+[ -n "$PROJ_GIT_DIR" ] || refuse "project '$PROJ_REAL' has no resolvable git directory"
+if [ "$PROJ_GIT_DIR" = "$PROJ_COMMON" ]; then
+  PROJ_PRIMARY=$PROJ_REAL
+else
+  # <project> is itself a linked worktree: its primary checkout is the parent of
+  # the shared common dir in the standard non-bare layout, verified rather than
+  # assumed by requiring that candidate's own git dir to be the common dir.
+  PROJ_PRIMARY=$(real_dir "$(dirname -- "$PROJ_COMMON")") || true
+  primary_git_dir=
+  [ -z "$PROJ_PRIMARY" ] || primary_git_dir=$(git_dir_of "$PROJ_PRIMARY") || true
+  [ -n "$primary_git_dir" ] && [ "$primary_git_dir" = "$PROJ_COMMON" ] \
+    || refuse "project '$PROJ_REAL' is a linked worktree whose primary checkout could not be resolved"
+fi
+[ "$PROJ_PRIMARY" != "$HOME_REAL" ] || refuse "the primary checkout '$PROJ_PRIMARY' is the home directory"
 
 case "$HARNESS" in
   grok)
     STORE_ROOT=${GROK_HOME:-$HOME_REAL/.grok}
     STORE_NAME=trusted_folders.toml
-    KEY=$PROJ_REAL
-    ;;
-  codex)
-    STORE_ROOT=${CODEX_HOME:-$HOME_REAL/.codex}
-    STORE_NAME=config.toml
-    KEY=$WT_REAL
+    KEY=$PROJ_PRIMARY
     ;;
 esac
 case "$STORE_ROOT" in
@@ -126,17 +138,16 @@ case "$STORE_ROOT" in
   *) refuse "the $HARNESS home '$STORE_ROOT' is not an absolute path" ;;
 esac
 
+# Every interpreter call runs in isolated mode (-I): the helper runs from the
+# worker's checkout, and a repository-local tomllib.py must never be imported.
 PYTHON=
 for candidate in python3 python3.14 python3.13 python3.12 python3.11; do
-  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import tomllib' >/dev/null 2>&1; then
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -I -c 'import tomllib' >/dev/null 2>&1; then
     PYTHON=$candidate
     break
   fi
 done
-if [ -z "$PYTHON" ]; then
-  echo "error: cannot pre-register $HARNESS trust: python 3.11 or newer (for tomllib) is required to read the trust store and was not found on PATH" >&2
-  exit 3
-fi
+[ -n "$PYTHON" ] || refuse "python 3.11 or newer (for tomllib) is required to read the trust store and was not found on PATH"
 
 if [ ! -e "$STORE_ROOT" ]; then
   (umask 077 && mkdir -p -- "$STORE_ROOT") 2>/dev/null || true
@@ -145,7 +156,7 @@ STORE_DIR_REAL=$(real_dir "$STORE_ROOT") || true
 [ -n "$STORE_DIR_REAL" ] || refuse "$HARNESS home '$STORE_ROOT' does not exist and could not be created"
 STORE="$STORE_DIR_REAL/$STORE_NAME"
 if [ -L "$STORE" ]; then
-  STORE_REAL=$("$PYTHON" -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$STORE" 2>/dev/null) || true
+  STORE_REAL=$("$PYTHON" -I -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$STORE" 2>/dev/null) || true
   [ -n "$STORE_REAL" ] || refuse "'$STORE' is a symlink whose target cannot be resolved"
   STORE=$STORE_REAL
 fi
@@ -155,16 +166,19 @@ if [ -e "$STORE" ]; then
   [ -w "$STORE" ] || refuse "'$STORE' is not writable"
 fi
 
-# Read-modify-write with a fingerprint check before the rename and a readback
-# after it: the harness itself rewrites this store when a worker answers a
-# dialog, so a store that moved under us is retried and then refused rather
-# than clobbered. Error messages name the store and the path only, never its
-# contents.
-if ! "$PYTHON" -I - "$HARNESS" "$STORE" "$KEY" "$PROJ_REAL" <<'PY'
-import copy, hashlib, json, os, secrets, sys, time, tomllib
+# Read-modify-write under an exclusive flock on a sibling lock file, so two
+# Firstmate homes sharing one user store cannot lose each other's entry; the
+# kernel drops the lock when this process exits, so a killed registration never
+# strands it. The harness itself does not take that lock and rewrites the store
+# when a worker answers a dialog, so the fingerprint is compared again
+# immediately before the rename and a store that moved is retried, then refused,
+# rather than clobbered. Error messages name the store and the path only, never
+# its contents.
+if ! "$PYTHON" -I - "$HARNESS" "$STORE" "$KEY" <<'PY'
+import copy, fcntl, hashlib, json, os, secrets, sys, time, tomllib
 
-harness, store, key, project = sys.argv[1:]
-table, field, value = ("folders", "trusted", True) if harness == "grok" else ("projects", "trust_level", "trusted")
+harness, store, key = sys.argv[1:]
+table, field, value = "folders", "trusted", True
 
 
 def fail(message):
@@ -178,6 +192,10 @@ def read():
             return stream.read()
     except FileNotFoundError:
         return None
+
+
+def fingerprint(raw):
+    return hashlib.sha256(raw).hexdigest() if raw is not None else "absent"
 
 
 def parse(raw):
@@ -203,36 +221,28 @@ def decision(doc, path):
     return entry.get(field)
 
 
-def check_declines(doc):
-    paths = [key] if harness == "grok" else [key, project]
-    for path in paths:
-        recorded = decision(doc, path)
-        if recorded is not None and recorded != value:
-            fail(f"records an explicit trust decline for {path}; not overriding it")
-
-
 def attempt():
     original = read()
-    before = hashlib.sha256(original).hexdigest() if original is not None else "absent"
+    before = fingerprint(original)
     doc = parse(original)
-    check_declines(doc)
-    if decision(doc, key) == value:
+    recorded = decision(doc, key)
+    if recorded == value:
         return "recorded"
+    if recorded is not None:
+        fail(f"records an explicit trust decline for {key}; not overriding it")
     text = original.decode("utf-8") if original else ""
     if text and not text.endswith("\n"):
         text += "\n"
     if text:
         text += "\n"
     text += f"[{table}.{json.dumps(key, ensure_ascii=False)}]\n"
-    if harness == "grok":
-        text += f"trusted = true\ndecided_at = {int(time.time())}\n"
-    else:
-        text += 'trust_level = "trusted"\n'
+    text += f"trusted = true\ndecided_at = {int(time.time())}\n"
     candidate = parse(text.encode("utf-8"))
     expected = copy.deepcopy(doc)
-    expected.setdefault(table, {})[key] = {field: value}
-    if harness == "grok":
-        expected[table][key]["decided_at"] = candidate.get(table, {}).get(key, {}).get("decided_at")
+    expected.setdefault(table, {})[key] = {
+        field: value,
+        "decided_at": candidate.get(table, {}).get(key, {}).get("decided_at"),
+    }
     if candidate != expected:
         fail("cannot take an appended trust table without changing its existing entries")
     mode = os.stat(store).st_mode & 0o777 if original is not None else 0o600
@@ -242,9 +252,10 @@ def attempt():
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.chmod(tmp, mode)
-        current = read()
-        if (hashlib.sha256(current).hexdigest() if current is not None else "absent") != before:
+        if fingerprint(read()) != before:
             return "moved"
         os.replace(tmp, store)
         renamed = True
@@ -257,13 +268,19 @@ def attempt():
     return "recorded" if decision(parse(read()), key) == value else "dropped"
 
 
-for attempt_number in range(3):
-    result = attempt()
-    if result == "recorded":
-        sys.exit(0)
-    if result == "moved" and attempt_number >= 1:
-        fail("was modified while trust was being recorded; refusing to overwrite it")
-fail(f"did not retain trust for {key} after 3 attempts")
+lock_path = f"{store}.fm-lock"
+lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+try:
+    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    for attempt_number in range(3):
+        result = attempt()
+        if result == "recorded":
+            sys.exit(0)
+        if result == "moved" and attempt_number >= 1:
+            fail("was modified while trust was being recorded; refusing to overwrite it")
+    fail(f"did not retain trust for {key} after 3 attempts")
+finally:
+    os.close(lock_fd)
 PY
 then
   refuse "could not record trust for '$KEY' in '$STORE'"

@@ -636,8 +636,8 @@
 # resolver because `cursor` is not the CLI name. A cursor SECONDMATE instead runs
 # the tracked project-scope .cursor/hooks.json in its own home, whose stop-hook
 # park owns that home's supervision (docs/supervision-protocols/cursor.md).
-# claude's pre-launch setup can REFUSE the spawn (grok's and codex's too, see
-# the pre-launch trust step): before
+# claude's pre-launch setup can REFUSE the spawn (grok's too, see the
+# pre-launch trust step): before
 # any per-task state exists, and before its busy hooks are written, every
 # claude launch pre-registers its launch directory -
 # the task worktree, or the secondmate home for a --secondmate spawn -
@@ -5896,13 +5896,11 @@ spawn_assert_agent_worktree
 # registration is not fatal here: the post-launch gate (agy_wait_for_working)
 # answers the dialog itself and, on a path that was not pre-registered, refuses
 # to count a busy turn as ready until it has done so.
-# grok and codex gate an unseen repository behind their own folder-trust dialog
-# and honour an entry written ahead of launch, so a ship or scout launch of
-# either pre-registers it through bin/fm-worker-trust.sh, which owns the store,
-# the key each harness reads, and the scope test. A refusal blocks the spawn
-# like claude's rather than launching a worker that would wedge on the dialog;
-# only a host without python 3.11+ to read the store degrades to a warning.
-# A secondmate home is persistent and is the operator's to trust once by hand.
+# grok gates an unseen repository behind its own folder-trust dialog and
+# honours an entry written ahead of launch, so a ship or scout launch
+# pre-registers it supervisor-side through bin/fm-worker-trust.sh, which owns
+# the store, the key the harness reads, and the scope test. Any refusal blocks
+# the spawn like claude's rather than launching a worker that would wedge.
 AGY_TRUST_PREREGISTERED=0
 case "$HARNESS" in
 claude*)
@@ -5928,14 +5926,42 @@ agy)
     echo "warning: could not pre-register agy workspace trust for $WT; the launch will answer the folder-trust dialog in window $T instead" >&2
   fi
   ;;
-grok* | codex*)
+grok)
+  # Ship and scout only: a secondmate home is persistent and keeps main's launch
+  # behavior. The helper reads its store from its own environment, so it runs
+  # with exactly the HOME and GROK_HOME the worker will see: the launch passes
+  # GROK_HOME through unless config/launch-env-allowlist omits it, in which case
+  # the worker falls back to $HOME/.grok. Where that store cannot be known here
+  # - a raw command that sets HOME or GROK_HOME itself, or an Orca session source
+  # that supplies GROK_HOME - the spawn refuses rather than guess. The launch
+  # command itself is never changed.
   if [ "$KIND" != secondmate ]; then
-    spawn_trust_rc=0
-    "$FM_ROOT/bin/fm-worker-trust.sh" "${HARNESS%%[!a-z]*}" "$WT" "$PROJ_ABS" >/dev/null || spawn_trust_rc=$?
-    if [ "$spawn_trust_rc" -eq 3 ]; then
-      echo "warning: could not pre-register ${HARNESS%%[!a-z]*} folder trust for $WT; a repository it has not trusted yet will show its trust dialog in window $T" >&2
-    elif [ "$spawn_trust_rc" -ne 0 ]; then
-      echo "error: could not pre-register ${HARNESS%%[!a-z]*} folder trust for $WT; refusing to launch a worker that would wedge on the trust dialog; $(spawn_endpoint_hint)" >&2
+    spawn_trust_env=()
+    if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
+      case $'\n'"$LAUNCH_ENV_NAMES"$'\n' in
+        *$'\n'GROK_HOME$'\n'*)
+          if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
+            echo "error: cannot pre-register grok folder trust for $WT: config/launch-env-tmux-session supplies GROK_HOME from an Orca session, so the worker's trust store cannot be determined here; $(spawn_endpoint_hint)" >&2
+            exit 1
+          fi
+          ;;
+        *) spawn_trust_env=(-u GROK_HOME) ;;
+      esac
+    fi
+    if [ "$RAW_LAUNCH" = 1 ]; then
+      for word in $ARG3; do
+        case "$word" in
+          HOME=* | GROK_HOME=*)
+            echo "error: cannot pre-register grok folder trust for $WT: the raw launch command sets ${word%%=*} itself, so the worker's trust store cannot be determined here; $(spawn_endpoint_hint)" >&2
+            exit 1
+            ;;
+          [A-Za-z_]*=*) continue ;;
+          *) break ;;
+        esac
+      done
+    fi
+    if ! env ${spawn_trust_env[@]+"${spawn_trust_env[@]}"} "$FM_ROOT/bin/fm-worker-trust.sh" grok "$WT" "$PROJ_ABS" >/dev/null; then
+      echo "error: could not pre-register grok folder trust for $WT; refusing to launch a worker that would wedge on the trust dialog; $(spawn_endpoint_hint)" >&2
       exit 1
     fi
   fi

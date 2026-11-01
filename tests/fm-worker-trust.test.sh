@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Behavior tests for bin/fm-worker-trust.sh and the grok and codex spawns that
-# call it.
+# Behavior tests for bin/fm-worker-trust.sh and the grok spawns that call it.
 #
-# Both halves of the contract are load-bearing: a fresh task worktree is
-# trusted under the key each harness actually reads (grok: the primary
-# checkout; codex: the worktree), so the worker reaches its brief with no
-# dialog, and every out-of-scope path, malformed store, and recorded decline is
-# REFUSED rather than warned about or quietly overridden.
+# Both halves of the contract are load-bearing: a fresh task worktree's
+# primary checkout is trusted in the store the worker will actually read, so
+# the worker reaches its brief with no dialog, and every out-of-scope path,
+# malformed store, recorded decline, and undeterminable store is REFUSED rather
+# than warned about or quietly overridden.
 set -u
 
 # shellcheck source=tests/fixtures.sh
@@ -18,7 +17,7 @@ TRUST="$ROOT/bin/fm-worker-trust.sh"
 
 PYTHON=
 for candidate in python3 python3.14 python3.13 python3.12 python3.11; do
-  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import tomllib' >/dev/null 2>&1; then
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -I -c 'import tomllib' >/dev/null 2>&1; then
     PYTHON=$candidate
     break
   fi
@@ -36,22 +35,21 @@ make_case() {
 }
 
 run_trust() {  # <harness> <worktree> <project>
-  env -u GROK_HOME -u CODEX_HOME HOME="$UHOME" "$TRUST" "$@" 2>&1
+  env -u GROK_HOME HOME="$UHOME" "$TRUST" "$@" 2>&1
 }
 
-# toml_value <store> <table> <key> <field>: the parsed value as JSON, or null.
+# toml_value <store> <key> <field>: the parsed [folders.<key>] value as JSON, or null.
 toml_value() {
-  "$PYTHON" -c '
+  "$PYTHON" -I -c '
 import json, sys, tomllib
-store, table, key, field = sys.argv[1:]
+store, key, field = sys.argv[1:]
 with open(store, "rb") as stream:
     doc = tomllib.load(stream)
-print(json.dumps(doc.get(table, {}).get(key, {}).get(field)))
+print(json.dumps(doc.get("folders", {}).get(key, {}).get(field)))
 ' "$@"
 }
 
 grok_store() { printf '%s\n' "$UHOME/.grok/trusted_folders.toml"; }
-codex_store() { printf '%s\n' "$UHOME/.codex/config.toml"; }
 
 need_python() {  # <label>
   [ -n "$PYTHON" ] && return 0
@@ -66,24 +64,26 @@ test_grok_trusts_the_primary_checkout() {
   out=$(run_trust grok "$WT" "$PROJ")
   expect_code 0 $? "a grok registration for a linked worktree must succeed: $out"
   assert_contains "$out" "trusted: $PROJ" "grok must record the primary checkout"
-  [ "$(toml_value "$(grok_store)" folders "$PROJ" trusted)" = true ] \
+  [ "$(toml_value "$(grok_store)" "$PROJ" trusted)" = true ] \
     || fail "the grok store does not trust the primary checkout"
-  [ "$(toml_value "$(grok_store)" folders "$WT" trusted)" = null ] \
+  [ "$(toml_value "$(grok_store)" "$WT" trusted)" = null ] \
     || fail "grok must not record the worktree path it never reads"
   pass "fm-worker-trust.sh: grok records the primary checkout grok keys on"
 }
 
-test_codex_trusts_only_the_worktree() {
-  need_python "fm-worker-trust.sh: codex records the worktree" || return 0
-  local out
-  make_case codex-basic
-  out=$(run_trust codex "$WT" "$PROJ")
-  expect_code 0 $? "a codex registration for a linked worktree must succeed: $out"
-  [ "$(toml_value "$(codex_store)" projects "$WT" trust_level)" = '"trusted"' ] \
-    || fail "the codex store does not trust the worktree"
-  [ "$(toml_value "$(codex_store)" projects "$PROJ" trust_level)" = null ] \
-    || fail "codex must not widen trust to the primary checkout"
-  pass "fm-worker-trust.sh: codex records only the worktree"
+test_linked_worktree_project_resolves_its_primary_checkout() {
+  need_python "fm-worker-trust.sh: a linked-worktree project resolves its primary" || return 0
+  local out second
+  make_case linked-project
+  second="$CASE_DIR/second"
+  git -C "$PROJ" worktree add --quiet -b wt-linked-second "$second"
+  out=$(run_trust grok "$WT" "$second")
+  expect_code 0 $? "a project argument that is itself a linked worktree must be accepted: $out"
+  [ "$(toml_value "$(grok_store)" "$PROJ" trusted)" = true ] \
+    || fail "the primary checkout behind a linked-worktree project was not recorded"
+  [ "$(toml_value "$(grok_store)" "$second" trusted)" = null ] \
+    || fail "the linked-worktree project path itself was recorded"
+  pass "fm-worker-trust.sh: a linked-worktree project records its primary checkout"
 }
 
 test_registration_is_idempotent() {
@@ -91,11 +91,9 @@ test_registration_is_idempotent() {
   local before after
   make_case idempotent
   run_trust grok "$WT" "$PROJ" >/dev/null || fail "first grok registration failed"
-  run_trust codex "$WT" "$PROJ" >/dev/null || fail "first codex registration failed"
-  before=$(cat "$(grok_store)" "$(codex_store)")
+  before=$(cat "$(grok_store)")
   run_trust grok "$WT" "$PROJ" >/dev/null || fail "repeat grok registration failed"
-  run_trust codex "$WT" "$PROJ" >/dev/null || fail "repeat codex registration failed"
-  after=$(cat "$(grok_store)" "$(codex_store)")
+  after=$(cat "$(grok_store)")
   [ "$before" = "$after" ] || fail "a repeat registration rewrote an already trusted store"
   pass "fm-worker-trust.sh: a repeat registration leaves the store unchanged"
 }
@@ -104,16 +102,16 @@ test_existing_store_content_is_preserved() {
   need_python "fm-worker-trust.sh: unrelated content is preserved" || return 0
   local store out
   make_case preserve
-  store=$(codex_store)
+  store=$(grok_store)
   mkdir -p "$(dirname "$store")"
-  printf '# operator comment\nmodel = "m"\n[projects."/elsewhere"]\ntrust_level = "trusted"' > "$store"
-  out=$(run_trust codex "$WT" "$PROJ")
+  printf '# operator comment\n[folders."/elsewhere"]\ntrusted = true\ndecided_at = 1' > "$store"
+  out=$(run_trust grok "$WT" "$PROJ")
   expect_code 0 $? "registration into an existing store must succeed: $out"
   assert_grep '# operator comment' "$store" "the operator's comment was dropped"
-  [ "$(toml_value "$store" projects /elsewhere trust_level)" = '"trusted"' ] \
-    || fail "an unrelated project entry was lost"
-  [ "$(toml_value "$store" projects "$WT" trust_level)" = '"trusted"' ] \
-    || fail "the worktree entry was not added"
+  [ "$(toml_value "$store" /elsewhere trusted)" = true ] \
+    || fail "an unrelated folder entry was lost"
+  [ "$(toml_value "$store" "$PROJ" trusted)" = true ] \
+    || fail "the primary checkout entry was not added"
   pass "fm-worker-trust.sh: existing store bytes and entries are preserved"
 }
 
@@ -125,20 +123,28 @@ test_out_of_scope_paths_are_refused() {
   out=$(run_trust grok "$PROJ" "$PROJ")
   expect_code 1 $? "the primary checkout must be refused: $out"
   assert_contains "$out" "primary checkout" "the refusal did not name the primary checkout"
-  out=$(run_trust codex "$WT/sub" "$PROJ")
+  out=$(run_trust grok "$WT/sub" "$PROJ")
   expect_code 1 $? "a worktree subdirectory must be refused: $out"
-  out=$(run_trust codex "$plain" "$PROJ")
+  out=$(run_trust grok "$plain" "$PROJ")
   expect_code 1 $? "a plain directory must be refused: $out"
   out=$(run_trust grok "$UHOME" "$PROJ")
   expect_code 1 $? "the home directory must be refused: $out"
-  out=$(run_trust grok "$WT" "$WT")
-  expect_code 1 $? "a project argument that is not a primary checkout must be refused: $out"
   make_case scope-foreign
-  out=$(run_trust codex "$WT" "$TMP_ROOT/scope/project")
+  out=$(run_trust grok "$WT" "$TMP_ROOT/scope/project")
   expect_code 1 $? "a worktree of an unrelated project must be refused: $out"
-  [ ! -e "$UHOME/.grok/trusted_folders.toml" ] && [ ! -e "$UHOME/.codex/config.toml" ] \
-    || fail "a refused registration still wrote a store"
+  [ ! -e "$UHOME/.grok/trusted_folders.toml" ] || fail "a refused registration still wrote a store"
   pass "fm-worker-trust.sh: every out-of-scope path is refused and nothing is written"
+}
+
+test_unverified_harness_name_is_refused() {
+  local out name
+  make_case unverified
+  for name in codex grokker grok-cli; do
+    out=$(run_trust "$name" "$WT" "$PROJ")
+    expect_code 2 $? "harness name '$name' must be refused: $out"
+  done
+  [ ! -e "$UHOME/.grok" ] || fail "an unverified harness name still wrote a store"
+  pass "fm-worker-trust.sh: only an exact verified harness name is accepted"
 }
 
 test_recorded_decline_is_not_overridden() {
@@ -153,13 +159,6 @@ test_recorded_decline_is_not_overridden() {
   expect_code 1 $? "a grok decline must be refused: $out"
   assert_contains "$out" "decline" "the grok refusal did not name the decline"
   [ "$before" = "$(cat "$store")" ] || fail "the grok decline was rewritten"
-  store=$(codex_store)
-  mkdir -p "$(dirname "$store")"
-  printf '[projects."%s"]\ntrust_level = "untrusted"\n' "$PROJ" > "$store"
-  before=$(cat "$store")
-  out=$(run_trust codex "$WT" "$PROJ")
-  expect_code 1 $? "a codex decline on the primary checkout must be refused: $out"
-  [ "$before" = "$(cat "$store")" ] || fail "the codex decline was overridden by a worktree entry"
   pass "fm-worker-trust.sh: a recorded decline is refused, never overridden"
 }
 
@@ -167,26 +166,26 @@ test_malformed_and_foreign_stores_are_refused() {
   need_python "fm-worker-trust.sh: malformed stores are refused" || return 0
   local out store
   make_case malformed
-  store=$(codex_store)
+  store=$(grok_store)
   mkdir -p "$(dirname "$store")"
   printf 'not = [valid\n' > "$store"
-  out=$(run_trust codex "$WT" "$PROJ")
+  out=$(run_trust grok "$WT" "$PROJ")
   expect_code 1 $? "an unparseable store must be refused: $out"
   assert_grep 'not = [valid' "$store" "the unparseable store was overwritten"
-  printf 'projects = { "/x" = { trust_level = "trusted" } }\n' > "$store"
-  out=$(run_trust codex "$WT" "$PROJ")
+  printf 'folders = { "/x" = { trusted = true } }\n' > "$store"
+  out=$(run_trust grok "$WT" "$PROJ")
   expect_code 1 $? "a store that cannot take an appended table must be refused: $out"
-  assert_grep 'projects = {' "$store" "the inline-table store was rewritten"
+  assert_grep 'folders = {' "$store" "the inline-table store was rewritten"
   if [ "$(id -u)" != 0 ]; then
     rm -f "$store"
     ln -s /etc/passwd "$store"
-    out=$(run_trust codex "$WT" "$PROJ")
+    out=$(run_trust grok "$WT" "$PROJ")
     expect_code 1 $? "a store resolving to another user's file must be refused: $out"
   fi
   pass "fm-worker-trust.sh: malformed and foreign-owned stores are refused untouched"
 }
 
-test_missing_python_exits_3_and_writes_nothing() {
+test_missing_python_is_a_refusal() {
   local out bindir tool
   make_case no-python
   bindir="$CASE_DIR/bin"
@@ -195,105 +194,131 @@ test_missing_python_exits_3_and_writes_nothing() {
     ln -s "$(command -v "$tool")" "$bindir/$tool"
   done
   out=$(env -u GROK_HOME HOME="$UHOME" PATH="$bindir" /bin/bash "$TRUST" grok "$WT" "$PROJ" 2>&1)
-  expect_code 3 $? "a host without python 3.11+ must exit 3: $out"
+  expect_code 1 $? "a host without python 3.11+ must refuse: $out"
+  assert_contains "$out" "python 3.11" "the refusal did not name the missing python"
   [ ! -e "$UHOME/.grok/trusted_folders.toml" ] || fail "a store was written without python"
-  out=$(env -u GROK_HOME HOME="$UHOME" PATH="$bindir" /bin/bash "$TRUST" grok "$PROJ" "$PROJ" 2>&1)
-  expect_code 1 $? "a scope refusal must not soften without python: $out"
-  pass "fm-worker-trust.sh: missing python exits 3 and a scope refusal stays a refusal"
+  pass "fm-worker-trust.sh: a host without python 3.11+ is refused, never warned past"
 }
 
-test_store_homes_are_relocated() {
-  need_python "fm-worker-trust.sh: GROK_HOME and CODEX_HOME relocate the store" || return 0
+test_repository_local_python_modules_are_not_imported() {
+  need_python "fm-worker-trust.sh: repository-local python modules are ignored" || return 0
+  local out marker
+  make_case local-module
+  marker="$CASE_DIR/imported"
+  printf 'open(%s, "w").close()\nraise SystemExit(0)\n' "'$marker'" > "$WT/tomllib.py"
+  out=$(cd "$WT" && env -u GROK_HOME HOME="$UHOME" PYTHONPATH="$WT" "$TRUST" grok "$WT" "$PROJ" 2>&1)
+  expect_code 0 $? "registration from a checkout holding tomllib.py must still succeed: $out"
+  [ ! -e "$marker" ] || fail "a repository-local tomllib.py was imported"
+  pass "fm-worker-trust.sh: a repository-local tomllib.py is never imported"
+}
+
+test_store_home_is_relocated() {
+  need_python "fm-worker-trust.sh: GROK_HOME relocates the store" || return 0
   local out
   make_case relocate
   out=$(HOME="$UHOME" GROK_HOME="$CASE_DIR/gh" "$TRUST" grok "$WT" "$PROJ" 2>&1)
   expect_code 0 $? "a GROK_HOME registration must succeed: $out"
-  [ "$(toml_value "$CASE_DIR/gh/trusted_folders.toml" folders "$PROJ" trusted)" = true ] \
+  [ "$(toml_value "$CASE_DIR/gh/trusted_folders.toml" "$PROJ" trusted)" = true ] \
     || fail "GROK_HOME was not honoured"
-  out=$(HOME="$UHOME" CODEX_HOME=relative "$TRUST" codex "$WT" "$PROJ" 2>&1)
-  expect_code 1 $? "a relative CODEX_HOME must be refused: $out"
+  out=$(HOME="$UHOME" GROK_HOME=relative "$TRUST" grok "$WT" "$PROJ" 2>&1)
+  expect_code 1 $? "a relative GROK_HOME must be refused: $out"
   [ ! -e "$UHOME/.grok" ] || fail "a relocated registration still wrote under HOME"
   pass "fm-worker-trust.sh: GROK_HOME relocates the store and a relative home is refused"
 }
 
-# spawn_worker <name> <harness> [extra env...]: a real fm-spawn of a ship worker
-# in a fresh linked worktree. Sets CASE_DIR, PROJ, WT, SPAWN_HOME, and OUT.
-spawn_worker() {
-  local name=$1 harness=$2 fakebin id assignment
-  shift 2
+# spawn_grok <name> <grok-home> <harness-or-raw-command> [allowlist-body]: a
+# real fm-spawn of a ship worker in a fresh linked worktree, with GROK_HOME set
+# to <grok-home> (empty leaves it unset) and, when a fourth argument is given,
+# config/launch-env-allowlist holding it. Sets CASE_DIR, PROJ, WT, SPAWN_HOME,
+# SPAWN_ID, OUT, and SPAWN_RC.
+spawn_grok() {
+  local name=$1 grok_home=$2 launch=$3 fakebin
   CASE_DIR="$TMP_ROOT/$name"
   SPAWN_HOME="$CASE_DIR/fmhome"
   PROJ="$CASE_DIR/project"
   WT="$CASE_DIR/wt"
-  id="${name//-/}$$"
-  fakebin=$(make_spawn_fakebin "$CASE_DIR/fake" "$harness")
-  fm_test_spawn_home "$SPAWN_HOME" "$harness"
+  SPAWN_ID="${name//-/}$$"
+  fakebin=$(make_spawn_fakebin "$CASE_DIR/fake" grok)
+  fm_test_spawn_home "$SPAWN_HOME" grok
+  if [ "$#" -ge 4 ]; then
+    printf '%s' "$4" > "$SPAWN_HOME/config/launch-env-allowlist"
+  fi
   fm_git_worktree "$PROJ" "$WT" "wt-$name"
-  fm_test_spawn_brief "$SPAWN_HOME" "$id"
+  fm_test_spawn_brief "$SPAWN_HOME" "$SPAWN_ID"
   OUT=$(
-    unset CODEX_HOME GROK_HOME
-    for assignment in "$@"; do export "${assignment?}"; done
-    fm_test_run_spawn "$SPAWN_HOME" "$WT" "$fakebin" "$id" "$PROJ" "$harness" \
+    unset GROK_HOME
+    [ -z "$grok_home" ] || export GROK_HOME="$grok_home"
+    fm_test_run_spawn "$SPAWN_HOME" "$WT" "$fakebin" "$SPAWN_ID" "$PROJ" "$launch" \
       --mode no-mistakes --yolo off
   )
+  SPAWN_RC=$?
 }
 
-test_codex_spawn_pretrusts_its_worktree() {
-  need_python "fm-spawn.sh: a codex spawn pre-trusts its worktree" || return 0
-  spawn_worker codex-spawn codex
-  expect_code 0 $? "the codex spawn failed: $OUT"
-  [ "$(toml_value "$SPAWN_HOME/user-home/.codex/config.toml" projects "$WT" trust_level)" = '"trusted"' ] \
-    || fail "the codex spawn did not pre-register its worktree: $OUT"
-  pass "fm-spawn.sh: a codex spawn pre-registers its worktree before launch"
-}
+user_grok_store() { printf '%s\n' "$SPAWN_HOME/user-home/.grok/trusted_folders.toml"; }
 
 test_grok_spawn_pretrusts_its_primary_checkout() {
   need_python "fm-spawn.sh: a grok spawn pre-trusts its checkout" || return 0
   local grok_home="$TMP_ROOT/grok-spawn-home"
   mkdir -p "$grok_home"
-  spawn_worker grok-spawn grok GROK_HOME="$grok_home"
-  expect_code 0 $? "the grok spawn failed: $OUT"
-  [ "$(toml_value "$grok_home/trusted_folders.toml" folders "$PROJ" trusted)" = true ] \
+  spawn_grok grok-spawn "$grok_home" grok
+  expect_code 0 "$SPAWN_RC" "the grok spawn failed: $OUT"
+  [ "$(toml_value "$grok_home/trusted_folders.toml" "$PROJ" trusted)" = true ] \
     || fail "the grok spawn did not pre-register the primary checkout: $OUT"
   pass "fm-spawn.sh: a grok spawn pre-registers the primary checkout before launch"
 }
 
+test_allowlist_without_grok_home_registers_the_default_store() {
+  need_python "fm-spawn.sh: an allowlist that drops GROK_HOME uses the default store" || return 0
+  local grok_home="$TMP_ROOT/allowlist-ignored-grok-home"
+  mkdir -p "$grok_home"
+  spawn_grok allowlist-default "$grok_home" grok ''
+  expect_code 0 "$SPAWN_RC" "the allowlisted grok spawn failed: $OUT"
+  [ "$(toml_value "$(user_grok_store)" "$PROJ" trusted)" = true ] \
+    || fail "a launch that drops GROK_HOME did not register the worker's default store: $OUT"
+  [ ! -e "$grok_home/trusted_folders.toml" ] \
+    || fail "a GROK_HOME the launch drops still received the registration"
+  pass "fm-spawn.sh: an allowlist that omits GROK_HOME registers \$HOME/.grok"
+}
+
+test_raw_command_setting_grok_home_is_refused() {
+  need_python "fm-spawn.sh: a raw command that sets GROK_HOME is refused" || return 0
+  spawn_grok raw-grok-home '' 'GROK_HOME=/elsewhere grok --always-approve'
+  expect_code 1 "$SPAWN_RC" "a raw grok launch that sets GROK_HOME must refuse: $OUT"
+  assert_contains "$OUT" "sets GROK_HOME itself" "the refusal did not name the undeterminable store"
+  [ ! -e "$SPAWN_HOME/state/$SPAWN_ID.meta" ] || fail "a refused raw launch still published task state"
+  [ ! -e "$(user_grok_store)" ] || fail "a refused raw launch still wrote a trust store"
+  pass "fm-spawn.sh: a raw grok command that sets GROK_HOME is refused, never parsed"
+}
+
 test_refused_spawn_leaves_no_task_state() {
-  need_python "fm-spawn.sh: a trust-refused codex spawn leaves no task state" || return 0
-  local codex_home="$TMP_ROOT/refused-codex-home" id
-  mkdir -p "$codex_home"
-  printf 'not = [valid\n' > "$codex_home/config.toml"
-  CASE_DIR="$TMP_ROOT/refused-spawn"
-  SPAWN_HOME="$CASE_DIR/fmhome"
-  PROJ="$CASE_DIR/project"
-  WT="$CASE_DIR/wt"
-  id="refusedcodex$$"
-  fm_test_spawn_home "$SPAWN_HOME" codex
-  fm_git_worktree "$PROJ" "$WT" wt-refused-codex
-  fm_test_spawn_brief "$SPAWN_HOME" "$id"
-  OUT=$(CODEX_HOME="$codex_home" \
-    fm_test_run_spawn "$SPAWN_HOME" "$WT" "$(make_spawn_fakebin "$CASE_DIR/fake" codex)" "$id" "$PROJ" codex \
-    --mode no-mistakes --yolo off)
-  expect_code 1 $? "a spawn whose trust registration is refused must fail: $OUT"
+  need_python "fm-spawn.sh: a trust-refused grok spawn leaves no task state" || return 0
+  local grok_home="$TMP_ROOT/refused-grok-home"
+  mkdir -p "$grok_home"
+  printf 'not = [valid\n' > "$grok_home/trusted_folders.toml"
+  spawn_grok refused-spawn "$grok_home" grok
+  expect_code 1 "$SPAWN_RC" "a spawn whose trust registration is refused must fail: $OUT"
   assert_contains "$OUT" "folder trust" "the spawn did not report the trust refusal"
-  [ ! -e "$SPAWN_HOME/state/$id.busy-state" ] \
+  [ ! -e "$SPAWN_HOME/state/$SPAWN_ID.busy-state" ] \
     || fail "a refused spawn stranded a busy record"
-  [ ! -e "/tmp/fm-$id" ] \
-    || { rm -rf "/tmp/fm-$id"; fail "a refused spawn stranded a temp root"; }
-  assert_grep 'not = [valid' "$codex_home/config.toml" "the refused spawn rewrote the store"
-  pass "fm-spawn.sh: a trust-refused codex spawn leaves no task state behind"
+  [ ! -e "/tmp/fm-$SPAWN_ID" ] \
+    || { rm -rf "/tmp/fm-$SPAWN_ID"; fail "a refused spawn stranded a temp root"; }
+  assert_grep 'not = [valid' "$grok_home/trusted_folders.toml" "the refused spawn rewrote the store"
+  pass "fm-spawn.sh: a trust-refused grok spawn leaves no task state behind"
 }
 
 fm_test_run \
   test_grok_trusts_the_primary_checkout \
-  test_codex_trusts_only_the_worktree \
+  test_linked_worktree_project_resolves_its_primary_checkout \
   test_registration_is_idempotent \
   test_existing_store_content_is_preserved \
   test_out_of_scope_paths_are_refused \
+  test_unverified_harness_name_is_refused \
   test_recorded_decline_is_not_overridden \
   test_malformed_and_foreign_stores_are_refused \
-  test_missing_python_exits_3_and_writes_nothing \
-  test_store_homes_are_relocated \
-  test_codex_spawn_pretrusts_its_worktree \
+  test_missing_python_is_a_refusal \
+  test_repository_local_python_modules_are_not_imported \
+  test_store_home_is_relocated \
   test_grok_spawn_pretrusts_its_primary_checkout \
+  test_allowlist_without_grok_home_registers_the_default_store \
+  test_raw_command_setting_grok_home_is_refused \
   test_refused_spawn_leaves_no_task_state

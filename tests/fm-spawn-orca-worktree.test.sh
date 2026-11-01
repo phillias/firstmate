@@ -748,6 +748,40 @@ EOF
   pass "the Orca snapshot passes through bytes tmux reports even when they are not valid UTF-8"
 }
 
+test_orca_snapshot_exposes_worker_store_values() {
+  local case_dir fb out state
+  case_dir="$TMP_ROOT/store-snapshot"
+  mkdir -p "$case_dir"
+  fb=$(fm_fakebin "$case_dir")
+  cat > "$fb/tmux" <<'EOF'
+#!/bin/sh
+[ "$1" = -u ] && [ "$2" = show-environment ] && [ "$3" = -t ] && [ "$4" = =scoped-source ] || exit 2
+case "${5:-}" in
+  '') printf '\n' ;;
+  HOME) printf 'HOME=/source-home\n' ;;
+  GROK_HOME)
+    if [ "${FM_TEST_GROK_UNSET:-0}" = 1 ]; then printf '%s\n' '-GROK_HOME'; else printf 'GROK_HOME=/source-grok\n'; fi
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$fb/tmux"
+  for state in set unset; do
+    out=$(FM_TEST_GROK_UNSET=$([ "$state" = unset ] && echo 1 || echo 0) NAMES=$'HOME\nGROK_HOME' PATH="$fb:$PATH" \
+      bash -c '. "$1"; fm_backend_orca_launch_env_args scoped-source "$NAMES" SNAPSHOT; printf "%s\n%s\n%s\n%s\n" "$FM_BACKEND_ORCA_HOME_STATE" "$FM_BACKEND_ORCA_HOME_VALUE" "$FM_BACKEND_ORCA_GROK_HOME_STATE" "$FM_BACKEND_ORCA_GROK_HOME_VALUE"' \
+      _ "$ROOT/bin/backends/orca.sh") \
+      || fail "the Orca source snapshot refused the $state GROK_HOME case"
+    assert_contains "$out" $'set\n/source-home' "the snapshot did not retain the sourced HOME"
+    if [ "$state" = set ]; then
+      assert_contains "$out" $'set\n/source-grok' "the snapshot did not retain sourced GROK_HOME"
+    else
+      assert_contains "$out" unset "the snapshot did not retain an explicitly unset GROK_HOME"
+      assert_not_contains "$out" /source-grok "an unset GROK_HOME retained a sourced value"
+    fi
+  done
+  pass "the Orca snapshot exposes sourced HOME and GROK_HOME state for trust registration"
+}
+
 # Without a configured source, a nonempty allowlist on Orca still resolves from
 # the Orca terminal; the spawn proceeds unchanged but says so on stderr.
 test_orca_allowlist_without_source_warns() {
@@ -878,6 +912,7 @@ test_orca_interrupted_spawn_before_send_removes_launch_file
 test_orca_launch_file_delete_failure_keeps_terminal
 test_orca_pane_wins_launch_file_race_at_deadline
 test_orca_snapshot_keeps_raw_bytes_tmux_reports
+test_orca_snapshot_exposes_worker_store_values
 test_orca_fresh_spawn_enters_the_worktree_it_created
 test_orca_relaunch_is_refused_before_the_worktree_carveout_could_run
 

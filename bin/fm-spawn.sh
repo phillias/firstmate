@@ -2163,6 +2163,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
 fi
 ORCA_LAUNCH_ENV_ENABLED=0
 ORCA_LAUNCH_ENV_ARGS=
+ORCA_LAUNCH_ENV_HOME_STATE=absent
+ORCA_LAUNCH_ENV_HOME_VALUE=
+ORCA_LAUNCH_ENV_GROK_HOME_STATE=absent
+ORCA_LAUNCH_ENV_GROK_HOME_VALUE=
 if [ "$RELAUNCH" -eq 0 ]; then
   mkdir -p "$STATE" || {
     echo "error: could not create parent state directory" >&2
@@ -2279,8 +2283,12 @@ if [ "$RELAUNCH" -eq 0 ]; then
           exit 1
           ;;
       esac
-      ORCA_LAUNCH_ENV_ARGS=$(fm_backend_orca_launch_env_args \
-        "$ORCA_LAUNCH_ENV_SESSION" "$LAUNCH_ENV_NAMES") || exit 1
+      fm_backend_orca_launch_env_args \
+        "$ORCA_LAUNCH_ENV_SESSION" "$LAUNCH_ENV_NAMES" ORCA_LAUNCH_ENV_ARGS || exit 1
+      ORCA_LAUNCH_ENV_HOME_STATE=$FM_BACKEND_ORCA_HOME_STATE
+      ORCA_LAUNCH_ENV_HOME_VALUE=$FM_BACKEND_ORCA_HOME_VALUE
+      ORCA_LAUNCH_ENV_GROK_HOME_STATE=$FM_BACKEND_ORCA_GROK_HOME_STATE
+      ORCA_LAUNCH_ENV_GROK_HOME_VALUE=$FM_BACKEND_ORCA_GROK_HOME_VALUE
     elif [ -n "$LAUNCH_ENV_NAMES" ]; then
       echo "warning: backend=orca resolves config/launch-env-allowlist names from the Orca terminal's own environment, not this home's; set config/launch-env-tmux-session to take them from a scoped tmux session" >&2
     fi
@@ -5937,8 +5945,35 @@ grok)
     if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
       case $'\n'"$LAUNCH_ENV_NAMES"$'\n' in
         *$'\n'GROK_HOME$'\n'*)
+          if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
+            case "$ORCA_LAUNCH_ENV_GROK_HOME_STATE" in
+              set) spawn_trust_env+=("GROK_HOME=$ORCA_LAUNCH_ENV_GROK_HOME_VALUE") ;;
+              unset) spawn_trust_env+=(-u GROK_HOME) ;;
+              *)
+                echo "error: cannot pre-register grok folder trust for $WT: the Orca source did not provide GROK_HOME; $(spawn_endpoint_hint)" >&2
+                exit 1
+                ;;
+            esac
+          fi
           ;;
         *) spawn_trust_env=(-u GROK_HOME) ;;
+      esac
+      case $'\n'"$LAUNCH_ENV_NAMES"$'\n' in
+        *$'\n'HOME$'\n'*)
+          if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
+            case "$ORCA_LAUNCH_ENV_HOME_STATE" in
+              set) spawn_trust_env+=("HOME=$ORCA_LAUNCH_ENV_HOME_VALUE") ;;
+              unset)
+                echo "error: cannot pre-register grok folder trust for $WT: the Orca source explicitly unsets HOME; $(spawn_endpoint_hint)" >&2
+                exit 1
+                ;;
+              *)
+                echo "error: cannot pre-register grok folder trust for $WT: the Orca source did not provide HOME; $(spawn_endpoint_hint)" >&2
+                exit 1
+                ;;
+            esac
+          fi
+          ;;
       esac
     fi
     if [ "$RAW_LAUNCH" = 1 ]; then

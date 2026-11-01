@@ -54,9 +54,10 @@ process.exit(1);
 # Every allowlisted name must exist in the session; an explicit -NAME record is
 # a deliberate unset, and a missing name refuses rather than falling back.
 fm_backend_orca_launch_env_args() {  # <tmux-session> <newline-separated names>
-  node - "$1" "$2" <<'JS'
+  local output_var=${3:-} snapshot
+  snapshot=$(node - "$1" "$2" "${output_var:+--state}" <<'JS'
 const { spawnSync } = require("child_process");
-const [session, names] = process.argv.slice(2);
+const [session, names, mode] = process.argv.slice(2);
 function refuse(name) {
   // Do not echo tmux output or errors: they may contain credential values.
   const required = name === undefined ? "" : ` (required name ${name})`;
@@ -79,6 +80,7 @@ function read(name) {
 // multiline values or tmux's automatically populated update-environment.
 read();
 const assignments = [];
+const state = {};
 for (const name of new Set(names.split("\n").filter(Boolean))) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) refuse();
   // Read each name separately so embedded/trailing newlines are preserved and
@@ -86,14 +88,39 @@ for (const name of new Set(names.split("\n").filter(Boolean))) {
   const output = read(name);
   if (!output.endsWith("\n")) refuse(name);
   const record = output.slice(0, -1);
-  if (record === `-${name}`) continue;
+  if (record === `-${name}`) {
+    if (mode === "--state" && (name === "HOME" || name === "GROK_HOME")) state[name] = ["unset", ""];
+    continue;
+  }
   if (!record.startsWith(`${name}=`)) refuse(name);
   const value = record.slice(name.length + 1);
   if (value.includes("\0")) refuse(name);
+  if (mode === "--state" && (name === "HOME" || name === "GROK_HOME")) state[name] = ["set", value];
   assignments.push(`${name}='${value.replace(/'/g, "'\\''")}'`);
 }
-process.stdout.write(assignments.join(" "), "latin1");
+const rendered = assignments.join(" ");
+if (mode === "--state") {
+  function shellQuote(value) {
+    return "'" + value.replace(/'/g, "'\\''") + "'";
+  }
+  process.stdout.write([
+    `FM_BACKEND_ORCA_LAUNCH_ENV_ARGS=${shellQuote(rendered)}`,
+    `FM_BACKEND_ORCA_HOME_STATE=${shellQuote((state.HOME || ["absent", ""])[0])}`,
+    `FM_BACKEND_ORCA_HOME_VALUE=${shellQuote((state.HOME || ["absent", ""])[1])}`,
+    `FM_BACKEND_ORCA_GROK_HOME_STATE=${shellQuote((state.GROK_HOME || ["absent", ""])[0])}`,
+    `FM_BACKEND_ORCA_GROK_HOME_VALUE=${shellQuote((state.GROK_HOME || ["absent", ""])[1])}`,
+  ].join("\n"));
+} else {
+  process.stdout.write(rendered, "latin1");
+}
 JS
+) || return
+  if [ -n "$output_var" ]; then
+    eval "$snapshot"
+    printf -v "$output_var" '%s' "$FM_BACKEND_ORCA_LAUNCH_ENV_ARGS"
+  else
+    printf '%s' "$snapshot"
+  fi
 }
 
 fm_backend_orca_json_get() {  # <field> ; fields: worktree-id worktree-path terminal-handle worktree-terminal-handle repo-id

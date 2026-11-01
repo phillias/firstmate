@@ -5928,22 +5928,15 @@ agy)
   ;;
 grok)
   # Ship and scout only: a secondmate home is persistent and keeps main's launch
-  # behavior. The helper reads its store from its own environment, so it runs
-  # with exactly the HOME and GROK_HOME the worker will see: the launch passes
-  # GROK_HOME through unless config/launch-env-allowlist omits it, in which case
-  # the worker falls back to $HOME/.grok. Where that store cannot be known here
-  # - a raw command that sets HOME or GROK_HOME itself, or an Orca session source
-  # that supplies GROK_HOME - the spawn refuses rather than guess. The launch
+  # behavior. The helper resolves the store from the supervisor's HOME and
+  # GROK_HOME, matching the supported spawn convention. A raw command that sets
+  # HOME or GROK_HOME itself cannot be resolved here and is refused. The launch
   # command itself is never changed.
   if [ "$KIND" != secondmate ]; then
     spawn_trust_env=()
     if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
       case $'\n'"$LAUNCH_ENV_NAMES"$'\n' in
         *$'\n'GROK_HOME$'\n'*)
-          if [ "$ORCA_LAUNCH_ENV_ENABLED" = 1 ]; then
-            echo "error: cannot pre-register grok folder trust for $WT: config/launch-env-tmux-session supplies GROK_HOME from an Orca session, so the worker's trust store cannot be determined here; $(spawn_endpoint_hint)" >&2
-            exit 1
-          fi
           ;;
         *) spawn_trust_env=(-u GROK_HOME) ;;
       esac

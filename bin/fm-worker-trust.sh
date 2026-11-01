@@ -226,7 +226,7 @@ def attempt():
     before = fingerprint(original)
     doc = parse(original)
     recorded = decision(doc, key)
-    if recorded == value:
+    if recorded is value:
         return "recorded"
     if recorded is not None:
         fail(f"records an explicit trust decline for {key}; not overriding it")
@@ -265,7 +265,7 @@ def attempt():
                 os.unlink(tmp)
             except FileNotFoundError:
                 pass
-    return "recorded" if decision(parse(read()), key) == value else "dropped"
+    return "recorded" if decision(parse(read()), key) is value else "dropped"
 
 
 lock_path = f"{store}.fm-lock"

@@ -55,6 +55,7 @@ Store written ahead of launch, then probed:
 
 So grok keys the decision on the resolved git root, an entry for the worktree path is ignored, and `GROK_HOME` relocates the store.
 `bin/fm-worker-trust.sh` therefore records the primary checkout, which is the same entry answering the dialog writes.
+During a spawn, the helper resolves the store from the supervisor's `HOME` and the harness home variable passed through by the launch (`GROK_HOME` today; `CODEX_HOME`, `PI_CODING_AGENT_DIR`, and the pinned Pi account root apply when those harnesses are added). The supported registration convention is supervisor-side resolution; launch strings are left unchanged.
 The binary also refuses to record an over-broad root (home, filesystem root, or a relative path), which the helper's own scope test mirrors.
 
 ## Regression

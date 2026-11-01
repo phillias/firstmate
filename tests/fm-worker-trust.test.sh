@@ -162,6 +162,22 @@ test_recorded_decline_is_not_overridden() {
   pass "fm-worker-trust.sh: a recorded decline is refused, never overridden"
 }
 
+test_numeric_trust_values_are_not_accepted() {
+  need_python "fm-worker-trust.sh: numeric trust values are rejected" || return 0
+  local out store before
+  make_case numeric-trust
+  store=$(grok_store)
+  mkdir -p "$(dirname "$store")"
+  for value in 1 1.0; do
+    printf '[folders."%s"]\ntrusted = %s\n' "$PROJ" "$value" > "$store"
+    before=$(cat "$store")
+    out=$(run_trust grok "$WT" "$PROJ")
+    expect_code 1 $? "numeric trust value '$value' must be refused: $out"
+    [ "$before" = "$(cat "$store")" ] || fail "numeric trust value '$value' was rewritten"
+  done
+  pass "fm-worker-trust.sh: numeric trust values are rejected"
+}
+
 test_malformed_and_foreign_stores_are_refused() {
   need_python "fm-worker-trust.sh: malformed stores are refused" || return 0
   local out store
@@ -314,6 +330,7 @@ fm_test_run \
   test_out_of_scope_paths_are_refused \
   test_unverified_harness_name_is_refused \
   test_recorded_decline_is_not_overridden \
+  test_numeric_trust_values_are_not_accepted \
   test_malformed_and_foreign_stores_are_refused \
   test_missing_python_is_a_refusal \
   test_repository_local_python_modules_are_not_imported \

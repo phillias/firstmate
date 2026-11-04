@@ -671,6 +671,54 @@ concurrent_safe_family_jobs_max() {
   esac
 }
 
+# Memory gate for agent-spawning families. The 2026-10-31 incident on a
+# 4-core/14G host: the backend-dispatch families spawn real worker
+# instances that together ate 4.5-4.8G within ~15 minutes and swap-thrashed
+# the box. Before launching a script from a memory-heavy family, hold it
+# until MemAvailable clears the floor (or the wait budget expires), so a
+# concurrent phase cannot stack agent instances past what the host can
+# hold. On a host without /proc/meminfo the gate is off. Override with
+# FM_TEST_MEMORY_FLOOR_MIB (floor) and FM_TEST_MEMORY_GATE_MAX_WAIT_SECS
+# (hold budget); FM_TEST_MEMORY_GATE_MAX_WAIT_SECS=0 disables the hold and
+# runs heavy scripts immediately.
+family_is_memory_heavy() {
+  case "$1" in
+    backend-dispatch) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+available_memory_mib() {
+  [ -r /proc/meminfo ] || return 1
+  local kib
+  kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+  [ -n "$kib" ] || return 1
+  printf '%s\n' $((kib / 1024))
+}
+
+memory_gate_wait() {  # <script>
+  local script=$1 base family floor max_wait waited avail
+  base=$(basename "$script")
+  family=$(family_for_basename "$base")
+  family_is_memory_heavy "$family" || return 0
+  floor=${FM_TEST_MEMORY_FLOOR_MIB:-2560}
+  max_wait=${FM_TEST_MEMORY_GATE_MAX_WAIT_SECS:-600}
+  [ "$max_wait" -gt 0 ] || return 0
+  waited=0
+  while avail=$(available_memory_mib); do
+    [ "$avail" -ge "$floor" ] && return 0
+    if [ "$waited" -eq 0 ]; then
+      log "memory gate: MemAvailable=${avail}MiB below floor ${floor}MiB; holding $base (family $family) up to ${max_wait}s"
+    fi
+    if [ "$waited" -ge "$max_wait" ]; then
+      log "memory gate: hold budget ${max_wait}s exhausted; launching $base at MemAvailable=${avail}MiB"
+      return 0
+    fi
+    sleep 10
+    waited=$((waited + 10))
+  done
+}
+
 # A script may run under --jobs when it is individually proven isolated or is
 # an exact repository member of a family carrying a recorded concurrent proof.
 script_allows_concurrency() {
@@ -2657,6 +2705,7 @@ run_one_serial() {
   base=$(basename "$script")
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
+  memory_gate_wait "$script"
   out="$RUN_TMP/out.$TOTAL"
   begin_iso=$(now_iso)
   begin_ms=$(now_ms)
@@ -2777,6 +2826,7 @@ else
     base=$(basename "$script")
     family=$(family_for_basename "$base")
     expected=$(expected_gate_skip_for_family "$family")
+    memory_gate_wait "$script"
     printf 'FM_TEST_BEGIN %s %s family=%s expected_gate_skip=%s\n' \
       "$(now_iso)" "$script" "$family" "$expected"
     (

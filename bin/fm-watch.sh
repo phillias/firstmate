@@ -1566,6 +1566,54 @@ wedge_defer_writing() {  # <window> <since-file> <triage-label> <idle-age>
   triage_log "absorbed $label (worktree written since the idle window opened, idle ${age}s): $win"
 }
 
+# ps cputime ([[dd-]hh:]mm:ss.##) as integer seconds.
+wedge_cputime_to_secs() {  # <value>
+  local value=$1 days=0 hours=0 mins=0 secs=0 rest
+  case "$value" in *-*) days=${value%%-*}; rest=${value#*-} ;; *) rest=$value ;; esac
+  case "$rest" in
+    *:*:*) hours=${rest%%:*}; rest=${rest#*:} ; mins=${rest%%:*}; secs=${rest#*:} ;;
+    *:*) mins=${rest%%:*}; secs=${rest#*:} ;;
+    *) secs=$rest ;;
+  esac
+  printf '%s\n' $(( days * 86400 + hours * 3600 + mins * 60 + ${secs%%.*} ))
+}
+
+# Summed cputime of the pane tty's foreground process group (pgid = tpgid),
+# the same scoping fm_tmux_composer_identity uses.
+wedge_fg_cpu_seconds() {  # <tty>
+  local tty=$1 line pgid tpgid total=0 cpu
+  while read -r line; do
+    read -r pgid tpgid cpu <<< "$line"
+    [ -n "$pgid" ] && [ "$pgid" = "$tpgid" ] || continue
+    total=$(( total + $(wedge_cputime_to_secs "$cpu") ))
+  done < <(LC_ALL=C ps -t "${tty#/dev/}" -o pgid=,tpgid=,cputime= 2>/dev/null)
+  printf '%s\n' "$total"
+}
+
+# The stale timer keys on rendered-pane stillness, which an idle render loop can
+# fake. This probe is the one positive-motion signal a pane cannot fake without
+# doing work: it sums the foreground process group's CPU time on the pane's tty,
+# sleeps, and samples again. Positive motion defers the escalation exactly once
+# per threshold crossing; zero delta and any unreadable sample both return
+# nonzero, so the unchanged escalation path stands and the probe can never
+# suppress an alarm. FM_WEDGE_CPU_PROBE_SECS opts a home in; unset or 0 keeps
+# the current behavior with no probe cost.
+wedge_cpu_motion_defers() {  # <window> <since-file> <triage-label> <idle-age>
+  local win=$1 since_file=$2 label=$3 age=$4 probe_secs tty sample1 sample2
+  probe_secs=${FM_WEDGE_CPU_PROBE_SECS:-0}
+  case "$probe_secs" in ''|0) return 1 ;; *[!0-9]*) return 1 ;; esac
+  tty=$(tmux display-message -p -t "$win" '#{pane_tty}' 2>/dev/null) || return 1
+  [ -n "$tty" ] || return 1
+  sample1=$(wedge_fg_cpu_seconds "$tty")
+  [ -n "$sample1" ] || return 1
+  sleep "$probe_secs"
+  sample2=$(wedge_fg_cpu_seconds "$tty")
+  [ -n "$sample2" ] || return 1
+  [ "$sample2" -gt "$sample1" ] || return 1
+  date +%s > "$since_file"
+  triage_log "absorbed $label (foreground CPU moving on the pane tty, idle ${age}s, +$(( sample2 - sample1 ))s cpu in ${probe_secs}s): $win"
+}
+
 # One wait record, carrying every field a recheck needs to be correct. Emitting
 # them together is the point: a recheck that names the wrong human, or asks for
 # an action that does not clear the lane, points the reader away from the only
@@ -2212,6 +2260,9 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
         fi
         if crew_worktree_written_since "$task" "$STATE" "$since_file"; then
           wedge_defer_writing "$win" "$since_file" "$label" "$age"
+          return 0
+        fi
+        if wedge_cpu_motion_defers "$win" "$since_file" "$label" "$age"; then
           return 0
         fi
         if wedge_dead_record "$win" "$since_file" "$label" "$age" "$hash" "$task"; then

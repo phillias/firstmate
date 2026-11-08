@@ -1,0 +1,16 @@
+== S1 reported kimi:medium config, BASE 470757ed ==
+CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: kimi:medium
+== S1 reported kimi:medium config, TARGET 643feaf6 ==
+CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: kimi:medium (kimi accepts no effort field; drop the effort key)
+== S2 remedy applied (effort key dropped), TARGET ==
+(no CREW_DISPATCH line - config valid)
+== S3 opencode rule effort, TARGET ==
+CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: opencode:low (opencode accepts no effort field; drop the effort key)
+== S3 cursor default object effort, TARGET ==
+CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: cursor:high (cursor accepts no effort field; drop the effort key)
+== S4 adversarial: grok max (effort-capable harness) has no drop-key note, TARGET ==
+CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: grok:max
+== S4 adversarial: mixed kimi + codex:max, TARGET ==
+CREW_DISPATCH: invalid config/crew-dispatch.json - invalid effort: codex:max, kimi:low (kimi accepts no effort field; drop the effort key)
+== S4 valid claude high effort accepted, TARGET ==
+(no CREW_DISPATCH line - config valid)

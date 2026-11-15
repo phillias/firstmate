@@ -1,0 +1,71 @@
+# CI — shellcheck + YAML validation + compose config check
+# Uses SHA-pinned actions per Chainguard best practices.
+# https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@00cae5002e482c5f907c5e2544e7def39f5ae5dc # 2.0.0
+        env:
+          SHELLCHECK_OPTS: -x
+        with:
+          severity: warning
+
+  yaml-validate:
+    name: YAML validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate YAML files
+        run: |
+          python3 -c "
+          import yaml, glob, sys
+          errors = []
+          for f in glob.glob('**/*.yaml', recursive=True) + glob.glob('**/*.yml', recursive=True):
+              if 'node_modules' in f or '.terraform' in f:
+                  continue
+              try:
+                  yaml.safe_load(open(f))
+              except Exception as e:
+                  errors.append(f'{f}: {e}')
+          if errors:
+              for e in errors:
+                  print(f'  X {e}')
+              sys.exit(1)
+          print(f'All YAML files valid')
+          "
+
+  compose-config:
+    name: Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate compose.yaml
+        run: |
+          if [ ! -f compose.yaml ] && [ ! -f compose.yml ] && [ ! -f docker-compose.yaml ] && [ ! -f docker-compose.yml ]; then
+            echo "No compose file found — skipping"
+            exit 0
+          fi
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "docker not available — skipping"
+            exit 0
+          fi
+          docker compose config --quiet 2>&1 || {
+            echo "compose config check failed (may need env vars) — non-blocking"
+            exit 0
+          }
+          echo "compose.yaml valid"

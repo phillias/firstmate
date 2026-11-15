@@ -1,0 +1,8 @@
+# Chainguard Guardener — Container Image Suggestions
+# Reviews pull requests that add or change container image references
+# and recommends Chainguard container image replacements.
+# Non-blocking review comments with one-click suggested changes.
+#
+# https://www.chainguard.dev/docs/chainguard/guardener/github/image-suggestions
+enabled: true
+prefer_fips: false

@@ -1,0 +1,19 @@
+# Chainguard Guardener — Commit Verification
+# Verifies that every commit in a pull request is cryptographically signed
+# by an authorized signer. A commit is accepted if it satisfies any authority.
+#
+# https://www.chainguard.dev/docs/chainguard/guardener/github/commit-verification
+spec:
+  authorities:
+    # Accept commits signed by GitHub's web-flow key (web UI merges, edits)
+    - key:
+        kms: https://github.com/web-flow.gpg
+    # Accept keyless Sigstore signatures from Google-authenticated identities
+    # matching the captain's email domain. Add more identities as needed.
+    - keyless:
+        url: https://fulcio.sigstore.dev
+        identities:
+          - subjectRegExp: .+@gmail\.com$
+            issuer: https://accounts.google.com
+      ctlog:
+        url: https://rekor.sigstore.dev

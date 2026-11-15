@@ -1,0 +1,10 @@
+# Chainguard Guardener — Hardened Actions
+# Recommends and migrates GitHub Actions to Chainguard's hardened,
+# SHA-pinned equivalents. Non-blocking review comments on PRs that
+# introduce unhardened actions, plus automated migration PRs.
+#
+# https://www.chainguard.dev/docs/chainguard/guardener/github/actions-security
+enabled: true
+migrate:
+  enabled: true
+  period: "168h"

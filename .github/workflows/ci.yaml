@@ -17,9 +17,9 @@ jobs:
     name: Shellcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: chainguard-actions/actions-checkout@77548e6996d4fe6357c1ac4b2e72cba4c9511aa9 # v4.2.2
       - name: Run shellcheck
-        uses: ludeeus/action-shellcheck@00cae5002e482c5f907c5e2544e7def39f5ae5dc # 2.0.0
+        uses: chainguard-actions/ludeeus-action-shellcheck@dbd8957d1708e7c5a72cce8165dc1d7b76b24d28 # 2.0.0
         env:
           SHELLCHECK_OPTS: -x
         with:
@@ -29,7 +29,7 @@ jobs:
     name: YAML validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: chainguard-actions/actions-checkout@77548e6996d4fe6357c1ac4b2e72cba4c9511aa9 # v4.2.2
       - name: Validate YAML files
         run: |
           python3 -c "
@@ -53,7 +53,7 @@ jobs:
     name: Compose config
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: chainguard-actions/actions-checkout@77548e6996d4fe6357c1ac4b2e72cba4c9511aa9 # v4.2.2
       - name: Validate compose.yaml
         run: |
           if [ ! -f compose.yaml ] && [ ! -f compose.yml ] && [ ! -f docker-compose.yaml ] && [ ! -f docker-compose.yml ]; then

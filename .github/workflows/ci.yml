@@ -37,7 +37,7 @@ jobs:
       matrix:
         partition: [1, 2]
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
       - name: Install pinned ShellCheck
         run: |
           set -eu
@@ -82,7 +82,7 @@ jobs:
     # Fast tier: the coverage guard is a seconds-long local computation.
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
       - name: Prove complete regression partition
         run: bin/fm-test-run.sh --check-coverage
 
@@ -94,7 +94,7 @@ jobs:
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
         with:
           fetch-depth: 0
       - name: Install pinned ShellCheck
@@ -138,7 +138,7 @@ jobs:
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
         with:
           fetch-depth: 0
       - name: Install pinned ShellCheck
@@ -187,7 +187,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
         with:
           fetch-depth: 0
       - name: Install pinned ShellCheck
@@ -256,7 +256,7 @@ jobs:
     # there with the always() cleanup and timing upload still running.
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
         with:
           fetch-depth: 0
       - name: Require tools for real Herdr
@@ -381,7 +381,7 @@ jobs:
       - tests-herdr
     if: always()
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
       - name: Download lane timing artifacts
         uses: actions/download-artifact@v4
         with:
@@ -415,7 +415,7 @@ jobs:
     # Normal tier (see the timeout policy above).
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
       - name: Run snapshot consumers with stock Bash
         shell: /bin/bash {0}
         env:
@@ -509,7 +509,7 @@ jobs:
     # Fast tier: the invariant checks are seconds-long file comparisons.
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - uses: chainguard-actions/actions-checkout@40e53bf063d4f87f0a6e0a83231c09bcfb22bc19 # v6
       - name: Compatibility pointers must stay intact
         run: |
           set -eu
